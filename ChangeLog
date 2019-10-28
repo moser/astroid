@@ -2,9 +2,109 @@
 astroid's ChangeLog
 ===================
 
-What's New in astroid 2.3.0?
+What's New in astroid 2.4.0?
 ============================
 Release Date: TBA
+
+* Added transform for ``scipy.gaussian``
+
+What's New in astroid 2.3.2?
+============================
+Release Date: TBA
+
+* All type comments have as parent the corresponding `astroid` node
+
+  Until now they had as parent the builtin `ast` node which meant
+  we were operating with primitive objects instead of our own.
+
+  Close PyCQA/pylint#3174
+
+
+* Pass an inference context to `metaclass()` when inferring an object type
+
+  This should prevent a bunch of recursion errors happening in pylint.
+  Also refactor the inference of `IfExp` nodes to use separate contexts
+  for each potential branch.
+
+  Close PyCQA/pylint#3152
+  Close PyCQA/pylint#3159
+
+
+What's New in astroid 2.3.1?
+============================
+Release Date: 2019-09-30
+
+* A transform for the builtin `dataclasses` module was added.
+
+  This should address various `dataclasses` issues that were surfaced
+  even more after the release of pylint 2.4.0.
+  In the previous versions of `astroid`, annotated assign nodes were
+  allowed to be retrieved via `getattr()` but that no longer happens
+  with the latest `astroid` release, as those attribute are not actual
+  attributes, but rather virtual ones, thus an operation such as `getattr()`
+  does not make sense for them.
+
+* Update attr brain to partly understand annotated attributes
+
+  Close #656
+
+
+What's New in astroid 2.3.0?
+============================
+Release Date: 2019-09-24
+
+* Add a brain tip for ``subprocess.check_output``
+
+  Close #689
+
+* Remove NodeNG.nearest method because of lack of usage in astroid and pylint.
+
+  Close #691
+
+* Allow importing wheel files. Close #541
+
+* Annotated AST follows PEP8 coding style when converted to string.
+
+* Fix a bug where defining a class using type() could cause a DuplicateBasesError.
+
+  Close #644
+
+* Dropped support for Python 3.4.
+
+* Numpy brain support is improved.
+
+  Numpy's fundamental type ``numpy.ndarray`` has its own brain : ``brain_numpy_ndarray`` and
+  each numpy module that necessitates brain action has now its own numpy brain :
+
+    - ``numpy.core.numeric``
+    - ``numpy.core.function_base``
+    - ``numpy.core.multiarray``
+    - ``numpy.core.numeric``
+    - ``numpy.core.numerictypes``
+    - ``numpy.core.umath``
+    - ``numpy.random.mtrand``
+
+  Close PyCQA/pylint#2865
+  Close PyCQA/pylint#2747
+  Close PyCQA/pylint#2721
+  Close PyCQA/pylint#2326
+  Close PyCQA/pylint#2021
+
+* ``assert`` only functions are properly inferred as returning ``None``
+
+  Close #668
+
+* Add support for Python 3.8's `NamedExpr` nodes, which is part of assignment expressions.
+
+  Close #674
+
+* Added support for inferring `IfExp` nodes.
+
+* Instances of exceptions are inferred as such when inferring in non-exception context
+
+  This allows special inference support for exception attributes such as `.args`.
+
+  Close PyCQA/pylint#2333
 
 * Drop a superfluous and wrong callcontext when inferring the result of a context manager
 
@@ -51,6 +151,17 @@ Release Date: TBA
   Close PyCQA/pylint#2734
   Close PyCQA/pylint#2740
 
+* Can access per argument type comments through new ``Arguments.type_comment_args`` attribute.
+
+  Close #665
+
+* Fix being unable to access class attributes on a NamedTuple.
+
+  Close PyCQA/pylint#1628
+
+* Fixed being unable to find distutils submodules by name when in a virtualenv.
+
+  Close PyCQA/pylint#73
 
 What's New in astroid 2.2.0?
 ============================

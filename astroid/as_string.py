@@ -21,8 +21,6 @@
 * :func:`dump` function return an internal representation of nodes found
   in the tree, useful for debugging or understanding the tree structure
 """
-import sys
-
 
 # pylint: disable=unused-argument
 
@@ -155,20 +153,16 @@ class AsStringVisitor:
     def visit_classdef(self, node):
         """return an astroid.ClassDef node as string"""
         decorate = node.decorators.accept(self) if node.decorators else ""
-        bases = ", ".join(n.accept(self) for n in node.bases)
-        metaclass = node.metaclass()
-        if metaclass and not node.has_metaclass_hack():
-            if bases:
-                bases = "(%s, metaclass=%s)" % (bases, metaclass.name)
-            else:
-                bases = "(metaclass=%s)" % metaclass.name
-        else:
-            bases = "(%s)" % bases if bases else ""
+        args = [n.accept(self) for n in node.bases]
+        if node._metaclass and not node.has_metaclass_hack():
+            args.append("metaclass=" + node._metaclass.accept(self))
+        args += [n.accept(self) for n in node.keywords]
+        args = "(%s)" % ", ".join(args) if args else ""
         docs = self._docs_dedent(node.doc) if node.doc else ""
         return "\n\n%sclass %s%s:%s\n%s\n" % (
             decorate,
             node.name,
-            bases,
+            args,
             docs,
             self._stmt_list(node.body),
         )
@@ -306,23 +300,32 @@ class AsStringVisitor:
             _import_string(node.names),
         )
 
-    def visit_functiondef(self, node):
-        """return an astroid.Function node as string"""
+    def handle_functiondef(self, node, keyword):
+        """return a (possibly async) function definition node as string"""
         decorate = node.decorators.accept(self) if node.decorators else ""
         docs = self._docs_dedent(node.doc) if node.doc else ""
         trailer = ":"
         if node.returns:
-            return_annotation = "->" + node.returns.as_string()
+            return_annotation = " -> " + node.returns.as_string()
             trailer = return_annotation + ":"
-        def_format = "\n%sdef %s(%s)%s%s\n%s"
+        def_format = "\n%s%s %s(%s)%s%s\n%s"
         return def_format % (
             decorate,
+            keyword,
             node.name,
             node.args.accept(self),
             trailer,
             docs,
             self._stmt_list(node.body),
         )
+
+    def visit_functiondef(self, node):
+        """return an astroid.FunctionDef node as string"""
+        return self.handle_functiondef(node, "def")
+
+    def visit_asyncfunctiondef(self, node):
+        """return an astroid.AsyncFunction node as string"""
+        return self.handle_functiondef(node, "async def")
 
     def visit_generatorexp(self, node):
         """return an astroid.GeneratorExp node as string"""
@@ -333,7 +336,10 @@ class AsStringVisitor:
 
     def visit_attribute(self, node):
         """return an astroid.Getattr node as string"""
-        return "%s.%s" % (self._precedence_parens(node, node.expr), node.attrname)
+        left = self._precedence_parens(node, node.expr)
+        if left.isdigit():
+            left = "(%s)" % left
+        return "%s.%s" % (left, node.attrname)
 
     def visit_global(self, node):
         """return an astroid.Global node as string"""
@@ -579,10 +585,6 @@ class AsStringVisitor3(AsStringVisitor):
 
         return "(%s)" % (expr,)
 
-    def visit_asyncfunctiondef(self, node):
-        function = super(AsStringVisitor3, self).visit_functiondef(node)
-        return "async " + function.strip()
-
     def visit_await(self, node):
         return "await %s" % node.value.accept(self)
 
@@ -593,16 +595,39 @@ class AsStringVisitor3(AsStringVisitor):
         return "async %s" % self.visit_for(node)
 
     def visit_joinedstr(self, node):
-        # Special treatment for constants,
-        # as we want to join literals not reprs
         string = "".join(
-            value.value if type(value).__name__ == "Const" else value.accept(self)
+            # Use repr on the string literal parts
+            # to get proper escapes, e.g. \n, \\, \"
+            # But strip the quotes off the ends
+            # (they will always be one character: ' or ")
+            repr(value.value)[1:-1]
+            # Literal braces must be doubled to escape them
+            .replace("{", "{{").replace("}", "}}")
+            # Each value in values is either a string literal (Const)
+            # or a FormattedValue
+            if type(value).__name__ == "Const" else value.accept(self)
             for value in node.values
         )
-        return "f'%s'" % string
+
+        # Try to find surrounding quotes that don't appear at all in the string.
+        # Because the formatted values inside {} can't contain backslash (\)
+        # using a triple quote is sometimes necessary
+        for quote in ["'", '"', '"""', "'''"]:
+            if quote not in string:
+                break
+
+        return "f" + quote + string + quote
 
     def visit_formattedvalue(self, node):
-        return "{%s}" % node.value.accept(self)
+        result = node.value.accept(self)
+        if node.conversion and node.conversion >= 0:
+            # e.g. if node.conversion == 114: result += "!r"
+            result += "!" + chr(node.conversion)
+        if node.format_spec:
+            # The format spec is itself a JoinedString, i.e. an f-string
+            # We strip the f and quotes of the ends
+            result += ":" + node.format_spec.accept(self)[2:-1]
+        return "{%s}" % result
 
     def visit_comprehension(self, node):
         """return an astroid.Comprehension node as string"""
@@ -610,6 +635,12 @@ class AsStringVisitor3(AsStringVisitor):
             "async " if node.is_async else "",
             super(AsStringVisitor3, self).visit_comprehension(node),
         )
+
+    def visit_namedexpr(self, node):
+        """Return an assignment expression node as string"""
+        target = node.target.accept(self)
+        value = node.value.accept(self)
+        return "%s := %s" % (target, value)
 
 
 def _import_string(names):
@@ -623,8 +654,7 @@ def _import_string(names):
     return ", ".join(_names)
 
 
-if sys.version_info >= (3, 0):
-    AsStringVisitor = AsStringVisitor3
+AsStringVisitor = AsStringVisitor3
 
 # This sets the default indent to 4 spaces.
 to_code = AsStringVisitor("    ")

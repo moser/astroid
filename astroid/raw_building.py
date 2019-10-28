@@ -34,6 +34,9 @@ MANAGER = manager.AstroidManager()
 
 _CONSTANTS = tuple(node_classes.CONST_CLS)
 _BUILTINS = vars(builtins)
+TYPE_NONE = type(None)
+TYPE_NOTIMPLEMENTED = type(NotImplemented)
+TYPE_ELLIPSIS = type(...)
 
 
 def _io_discrepancy(member):
@@ -117,17 +120,22 @@ def build_class(name, basenames=(), doc=None):
     return node
 
 
-def build_function(name, args=None, defaults=None, doc=None):
+def build_function(name, args=None, posonlyargs=None, defaults=None, doc=None):
     """create and initialize an astroid FunctionDef node"""
-    args, defaults = args or [], defaults or []
+    args, defaults, posonlyargs = args or [], defaults or [], posonlyargs or []
     # first argument is now a list of decorators
     func = nodes.FunctionDef(name, doc)
     func.args = argsnode = nodes.Arguments()
     argsnode.args = []
+    argsnode.posonlyargs = []
     for arg in args:
         argsnode.args.append(nodes.Name())
         argsnode.args[-1].name = arg
         argsnode.args[-1].parent = argsnode
+    for arg in posonlyargs:
+        argsnode.posonlyargs.append(nodes.Name())
+        argsnode.posonlyargs[-1].name = arg
+        argsnode.posonlyargs[-1].parent = argsnode
     argsnode.defaults = []
     for default in defaults:
         argsnode.defaults.append(nodes.const_factory(default))
@@ -172,14 +180,27 @@ def object_build_class(node, member, localname):
 
 def object_build_function(node, member, localname):
     """create astroid for a living function object"""
-    # pylint: disable=deprecated-method; completely removed in 2.0
-    args, varargs, varkw, defaults = inspect.getargspec(member)
-    if varargs is not None:
-        args.append(varargs)
-    if varkw is not None:
-        args.append(varkw)
+    signature = inspect.signature(member)
+    args = []
+    defaults = []
+    posonlyargs = []
+    for param_name, param in signature.parameters.items():
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+            posonlyargs.append(param_name)
+        elif param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+            args.append(param_name)
+        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+            args.append(param_name)
+        elif param.kind == inspect.Parameter.VAR_KEYWORD:
+            args.append(param_name)
+        if param.default is not inspect._empty:
+            defaults.append(param.default)
     func = build_function(
-        getattr(member, "__name__", None) or localname, args, defaults, member.__doc__
+        getattr(member, "__name__", None) or localname,
+        args,
+        posonlyargs,
+        defaults,
+        member.__doc__,
     )
     node.add_local_node(func, localname)
 
@@ -390,11 +411,14 @@ def _astroid_bootstrapping():
 
     # pylint: disable=redefined-outer-name
     for cls, node_cls in node_classes.CONST_CLS.items():
-        if cls is type(None):
+        if cls is TYPE_NONE:
             proxy = build_class("NoneType")
             proxy.parent = astroid_builtin
-        elif cls is type(NotImplemented):
+        elif cls is TYPE_NOTIMPLEMENTED:
             proxy = build_class("NotImplementedType")
+            proxy.parent = astroid_builtin
+        elif cls is TYPE_ELLIPSIS:
+            proxy = build_class("Ellipsis")
             proxy.parent = astroid_builtin
         else:
             proxy = astroid_builtin.getattr(cls.__name__)[0]
@@ -425,8 +449,8 @@ def _astroid_bootstrapping():
         types.GetSetDescriptorType,
         types.GeneratorType,
         types.MemberDescriptorType,
-        type(None),
-        type(NotImplemented),
+        TYPE_NONE,
+        TYPE_NOTIMPLEMENTED,
         types.FunctionType,
         types.MethodType,
         types.BuiltinFunctionType,
