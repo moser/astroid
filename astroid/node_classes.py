@@ -3,7 +3,7 @@
 # Copyright (c) 2010 Daniel Harding <dharding@gmail.com>
 # Copyright (c) 2012 FELD Boris <lothiraldan@gmail.com>
 # Copyright (c) 2013-2014 Google, Inc.
-# Copyright (c) 2014-2018 Claudiu Popa <pcmanticore@gmail.com>
+# Copyright (c) 2014-2020 Claudiu Popa <pcmanticore@gmail.com>
 # Copyright (c) 2014 Eevee (Alex Munroe) <amunroe@yelp.com>
 # Copyright (c) 2015-2016 Ceridwen <ceridwenv@gmail.com>
 # Copyright (c) 2015 Florian Bruhin <me@the-compiler.org>
@@ -11,13 +11,17 @@
 # Copyright (c) 2016 Jared Garst <jgarst@users.noreply.github.com>
 # Copyright (c) 2016 Jakub Wilk <jwilk@jwilk.net>
 # Copyright (c) 2016 Dave Baum <dbaum@google.com>
-# Copyright (c) 2017-2018 Ashley Whetter <ashley@awhetter.co.uk>
-# Copyright (c) 2017 Łukasz Rogalski <rogalski.91@gmail.com>
+# Copyright (c) 2017-2020 Ashley Whetter <ashley@awhetter.co.uk>
+# Copyright (c) 2017, 2019 Łukasz Rogalski <rogalski.91@gmail.com>
 # Copyright (c) 2017 rr- <rr-@sakuya.pl>
+# Copyright (c) 2018-2019 hippo91 <guillaume.peillex@gmail.com>
+# Copyright (c) 2018 Nick Drozd <nicholasdrozd@gmail.com>
+# Copyright (c) 2018 Ville Skyttä <ville.skytta@iki.fi>
 # Copyright (c) 2018 Bryce Guinta <bryce.paul.guinta@gmail.com>
 # Copyright (c) 2018 brendanator <brendan.maginnis@gmail.com>
-# Copyright (c) 2018 Nick Drozd <nicholasdrozd@gmail.com>
 # Copyright (c) 2018 HoverHell <hoverhell@gmail.com>
+# Copyright (c) 2019 kavins14 <kavin.singh@mail.utoronto.ca>
+# Copyright (c) 2019 kavins14 <kavinsingh@hotmail.com>
 
 # Licensed under the LGPL: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html
 # For details: https://github.com/PyCQA/astroid/blob/master/COPYING.LESSER
@@ -350,19 +354,37 @@ class NodeNG:
             # explicit_inference is not bound, give it self explicitly
             try:
                 # pylint: disable=not-callable
-                return self._explicit_inference(self, context, **kwargs)
+                yield from self._explicit_inference(self, context, **kwargs)
+                return
             except exceptions.UseInferenceDefault:
                 pass
 
         if not context:
-            return self._infer(context, **kwargs)
+            yield from self._infer(context, **kwargs)
+            return
 
         key = (self, context.lookupname, context.callcontext, context.boundnode)
         if key in context.inferred:
-            return iter(context.inferred[key])
+            yield from context.inferred[key]
+            return
 
-        gen = context.cache_generator(key, self._infer(context, **kwargs))
-        return util.limit_inference(gen, MANAGER.max_inferable_values)
+        generator = self._infer(context, **kwargs)
+        results = []
+
+        # Limit inference amount to help with performance issues with
+        # exponentially exploding possible results.
+        limit = MANAGER.max_inferable_values
+        for i, result in enumerate(generator):
+            if i >= limit:
+                yield util.Uninferable
+                break
+            results.append(result)
+            yield result
+
+        # Cache generated results for subsequent inferences of the
+        # same node using the same context
+        context.inferred[key] = tuple(results)
+        return
 
     def _repr_name(self):
         """Get a name for nice representation.
@@ -897,7 +919,7 @@ class NodeNG:
         _repr_tree(self, result, set())
         return "".join(result)
 
-    def bool_value(self):
+    def bool_value(self, context=None):
         """Determine the boolean value of this node.
 
         The boolean value of a node can have three
@@ -986,7 +1008,7 @@ class _BaseContainer(
         :type: list(NodeNG)
         """
 
-        super(_BaseContainer, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, elts):
         """Do some setup after initialisation.
@@ -1021,7 +1043,7 @@ class _BaseContainer(
         """
         return self.elts
 
-    def bool_value(self):
+    def bool_value(self, context=None):
         """Determine the boolean value of this node.
 
         :returns: The boolean value of this node.
@@ -1145,10 +1167,9 @@ class LookupMixIn:
         _stmts = []
         _stmt_parents = []
         statements = self._get_filtered_node_statements(stmts)
-
         for node, stmt in statements:
             # line filtering is on and we have reached our location, break
-            if stmt.fromlineno > mylineno > 0:
+            if stmt.fromlineno and stmt.fromlineno > mylineno > 0:
                 break
             # Ignore decorators with the same name as the
             # decorated function
@@ -1282,7 +1303,7 @@ class AssignName(
         :type: str or None
         """
 
-        super(AssignName, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
 
 class DelName(
@@ -1322,7 +1343,7 @@ class DelName(
         :type: str or None
         """
 
-        super(DelName, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
 
 class Name(mixins.NoChildrenMixin, LookupMixIn, NodeNG):
@@ -1363,7 +1384,7 @@ class Name(mixins.NoChildrenMixin, LookupMixIn, NodeNG):
         :type: str or None
         """
 
-        super(Name, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def _get_name_nodes(self):
         yield self
@@ -1395,18 +1416,21 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
     #  - we expose 'annotation', a list with annotations for
     #    for each normal argument. If an argument doesn't have an
     #    annotation, its value will be None.
-
+    # pylint: disable=too-many-instance-attributes
     _astroid_fields = (
         "args",
         "defaults",
         "kwonlyargs",
         "posonlyargs",
+        "posonlyargs_annotations",
         "kw_defaults",
         "annotations",
         "varargannotation",
         "kwargannotation",
         "kwonlyargs_annotations",
         "type_comment_args",
+        "type_comment_kwonlyargs",
+        "type_comment_posonlyargs",
     )
     varargannotation = None
     """The type annotation for the variable length arguments.
@@ -1432,7 +1456,7 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
         :param parent: The parent node in the syntax tree.
         :type parent: NodeNG or None
         """
-        super(Arguments, self).__init__(parent=parent)
+        super().__init__(parent=parent)
         self.vararg = vararg
         """The name of the variable length arguments.
 
@@ -1502,6 +1526,24 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
         :type: list(NodeNG or None)
         """
 
+        self.type_comment_kwonlyargs = []
+        """The type annotation, passed by a type comment, of each keyword only argument.
+
+        If an argument does not have a type comment,
+        the value for that argument will be None.
+
+        :type: list(NodeNG or None)
+        """
+
+        self.type_comment_posonlyargs = []
+        """The type annotation, passed by a type comment, of each positional argument.
+
+        If an argument does not have a type comment,
+        the value for that argument will be None.
+
+        :type: list(NodeNG or None)
+        """
+
     # pylint: disable=too-many-arguments
     def postinit(
         self,
@@ -1516,6 +1558,8 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
         varargannotation=None,
         kwargannotation=None,
         type_comment_args=None,
+        type_comment_kwonlyargs=None,
+        type_comment_posonlyargs=None,
     ):
         """Do some setup after initialisation.
 
@@ -1563,6 +1607,14 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
         :param type_comment_args: The type annotation,
             passed by a type comment, of each argument.
         :type type_comment_args: list(NodeNG or None)
+
+        :param type_comment_args: The type annotation,
+            passed by a type comment, of each keyword only argument.
+        :type type_comment_args: list(NodeNG or None)
+
+        :param type_comment_args: The type annotation,
+            passed by a type comment, of each positional argument.
+        :type type_comment_args: list(NodeNG or None)
         """
         self.args = args
         self.defaults = defaults
@@ -1575,6 +1627,8 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
         self.varargannotation = varargannotation
         self.kwargannotation = kwargannotation
         self.type_comment_args = type_comment_args
+        self.type_comment_kwonlyargs = type_comment_kwonlyargs
+        self.type_comment_posonlyargs = type_comment_posonlyargs
 
     # pylint: disable=too-many-arguments
 
@@ -1589,8 +1643,13 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
 
         :type: int or None
         """
-        lineno = super(Arguments, self).fromlineno
+        lineno = super().fromlineno
         return max(lineno, self.parent.fromlineno or 0)
+
+    @decorators.cachedproperty
+    def arguments(self):
+        """Get all the arguments for this node, including positional only and positional and keyword"""
+        return list(itertools.chain((self.posonlyargs or ()), self.args or ()))
 
     def format_args(self):
         """Get the arguments formatted as string.
@@ -1607,7 +1666,13 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
             positional_only_defaults = self.defaults[: len(self.defaults) - len(args)]
 
         if self.posonlyargs:
-            result.append(_format_args(self.posonlyargs, positional_only_defaults))
+            result.append(
+                _format_args(
+                    self.posonlyargs,
+                    positional_only_defaults,
+                    self.posonlyargs_annotations,
+                )
+            )
             result.append("/")
         if self.args:
             result.append(
@@ -1640,7 +1705,7 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
         :raises NoDefault: If there is no default value defined for the
             given argument.
         """
-        args = list(itertools.chain((self.posonlyargs or ()), self.args or ()))
+        args = self.arguments
         index = _find_arg(argname, args)[0]
         if index is not None:
             idx = index - (len(args) - len(self.defaults))
@@ -1684,15 +1749,17 @@ class Arguments(mixins.AssignTypeMixin, NodeNG):
         :returns: The index and node for the argument.
         :rtype: tuple(str or None, AssignName or None)
         """
-        if (
-            self.args or self.posonlyargs
-        ):  # self.args may be None in some cases (builtin function)
-            arguments = itertools.chain(self.posonlyargs or (), self.args or ())
-            return _find_arg(argname, arguments, rec)
+        if self.arguments:
+            return _find_arg(argname, self.arguments, rec)
         return None, None
 
     def get_children(self):
         yield from self.posonlyargs or ()
+
+        for elt in self.posonlyargs_annotations:
+            if elt is not None:
+                yield elt
+
         yield from self.args or ()
 
         yield from self.defaults
@@ -1796,7 +1863,7 @@ class AssignAttr(mixins.ParentAssignTypeMixin, NodeNG):
         :type: str or None
         """
 
-        super(AssignAttr, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, expr=None):
         """Do some setup after initialisation.
@@ -2015,7 +2082,7 @@ class AugAssign(mixins.AssignTypeMixin, Statement):
         :type: str or None
         """
 
-        super(AugAssign, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, target=None, value=None):
         """Do some setup after initialisation.
@@ -2128,7 +2195,7 @@ class BinOp(NodeNG):
         :type: str or None
         """
 
-        super(BinOp, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, left=None, right=None):
         """Do some setup after initialisation.
@@ -2216,7 +2283,7 @@ class BoolOp(NodeNG):
         :type: str or None
         """
 
-        super(BoolOp, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, values=None):
         """Do some setup after initialisation.
@@ -2414,7 +2481,7 @@ class Comprehension(NodeNG):
         :param parent: The parent node in the syntax tree.
         :type parent: NodeNG or None
         """
-        super(Comprehension, self).__init__()
+        super().__init__()
         self.parent = parent
 
     # pylint: disable=redefined-builtin; same name as builtin ast module.
@@ -2511,7 +2578,7 @@ class Const(mixins.NoChildrenMixin, NodeNG, bases.Instance):
         :type: object
         """
 
-        super(Const, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def __getattr__(self, name):
         # This is needed because of Proxy's __getattr__ method.
@@ -2574,13 +2641,13 @@ class Const(mixins.NoChildrenMixin, NodeNG, bases.Instance):
         """An iterator over the elements this node contains.
 
         :returns: The contents of this node.
-        :rtype: iterable(str)
+        :rtype: iterable(Const)
 
         :raises TypeError: If this node does not represent something that is iterable.
         """
         if isinstance(self.value, str):
-            return self.value
-        raise TypeError()
+            return [const_factory(elem) for elem in self.value]
+        raise TypeError("Cannot iterate over type {!r}".format(type(self.value)))
 
     def pytype(self):
         """Get the name of the type that this node represents.
@@ -2590,7 +2657,7 @@ class Const(mixins.NoChildrenMixin, NodeNG, bases.Instance):
         """
         return self._proxied.qname()
 
-    def bool_value(self):
+    def bool_value(self, context=None):
         """Determine the boolean value of this node.
 
         :returns: The boolean value of this node.
@@ -2692,7 +2759,7 @@ class DelAttr(mixins.ParentAssignTypeMixin, NodeNG):
         :type: str or None
         """
 
-        super(DelAttr, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, expr=None):
         """Do some setup after initialisation.
@@ -2765,7 +2832,7 @@ class Dict(NodeNG, bases.Instance):
         :type: list(tuple(NodeNG, NodeNG))
         """
 
-        super(Dict, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, items):
         """Do some setup after initialisation.
@@ -2863,7 +2930,7 @@ class Dict(NodeNG, bases.Instance):
 
         raise exceptions.AstroidIndexError(index)
 
-    def bool_value(self):
+    def bool_value(self, context=None):
         """Determine the boolean value of this node.
 
         :returns: The boolean value of this node.
@@ -2918,7 +2985,7 @@ class Ellipsis(mixins.NoChildrenMixin, NodeNG):  # pylint: disable=redefined-bui
     <Ellipsis l.1 at 0x7f23b2e35160>
     """
 
-    def bool_value(self):
+    def bool_value(self, context=None):
         """Determine the boolean value of this node.
 
         :returns: The boolean value of this node.
@@ -3297,7 +3364,7 @@ class ImportFrom(mixins.NoChildrenMixin, mixins.ImportFromMixin, Statement):
         :type: int
         """
 
-        super(ImportFrom, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
 
 class Attribute(NodeNG):
@@ -3332,7 +3399,7 @@ class Attribute(NodeNG):
         :type: str or None
         """
 
-        super(Attribute, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, expr=None):
         """Do some setup after initialisation.
@@ -3377,7 +3444,7 @@ class Global(mixins.NoChildrenMixin, Statement):
         :type: list(str)
         """
 
-        super(Global, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def _infer_name(self, frame, name):
         return name
@@ -3457,6 +3524,11 @@ class If(mixins.MultiLineBlockMixin, mixins.BlockRangeMixIn, Statement):
 
     def has_elif_block(self):
         return len(self.orelse) == 1 and isinstance(self.orelse[0], If)
+
+    def _get_yield_nodes_skip_lambdas(self):
+        """An If node can contain a Yield node in the test"""
+        yield from self.test._get_yield_nodes_skip_lambdas()
+        yield from super()._get_yield_nodes_skip_lambdas()
 
 
 class IfExp(NodeNG):
@@ -3545,7 +3617,7 @@ class Import(mixins.NoChildrenMixin, mixins.ImportFromMixin, Statement):
         :type: list(tuple(str, str or None)) or None
         """
 
-        super(Import, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
 
 class Index(NodeNG):
@@ -3618,7 +3690,7 @@ class Keyword(NodeNG):
         :type: Name or None
         """
 
-        super(Keyword, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, value=None):
         """Do some setup after initialisation.
@@ -3663,7 +3735,7 @@ class List(_BaseContainer):
         :type: Context or None
         """
 
-        super(List, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def pytype(self):
         """Get the name of the type that this node represents.
@@ -3718,7 +3790,7 @@ class Nonlocal(mixins.NoChildrenMixin, Statement):
         :type: list(str)
         """
 
-        super(Nonlocal, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def _infer_name(self, frame, name):
         return name
@@ -3774,7 +3846,7 @@ class Print(Statement):
         :type: bool or None
         """
 
-        super(Print, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, dest=None, values=None):
         """Do some setup after initialisation.
@@ -4027,9 +4099,7 @@ class Starred(mixins.ParentAssignTypeMixin, NodeNG):
         :type: Context or None
         """
 
-        super(Starred, self).__init__(
-            lineno=lineno, col_offset=col_offset, parent=parent
-        )
+        super().__init__(lineno=lineno, col_offset=col_offset, parent=parent)
 
     def postinit(self, value=None):
         """Do some setup after initialisation.
@@ -4085,9 +4155,7 @@ class Subscript(NodeNG):
         :type: Context or None
         """
 
-        super(Subscript, self).__init__(
-            lineno=lineno, col_offset=col_offset, parent=parent
-        )
+        super().__init__(lineno=lineno, col_offset=col_offset, parent=parent)
 
     # pylint: disable=redefined-builtin; had to use the same name as builtin ast module.
     def postinit(self, value=None, slice=None):
@@ -4280,7 +4348,7 @@ class Tuple(_BaseContainer):
         :type: Context or None
         """
 
-        super(Tuple, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def pytype(self):
         """Get the name of the type that this node represents.
@@ -4336,7 +4404,7 @@ class UnaryOp(NodeNG):
         :type: str or None
         """
 
-        super(UnaryOp, self).__init__(lineno, col_offset, parent)
+        super().__init__(lineno, col_offset, parent)
 
     def postinit(self, operand=None):
         """Do some setup after initialisation.
@@ -4449,6 +4517,11 @@ class While(mixins.MultiLineBlockMixin, mixins.BlockRangeMixIn, Statement):
 
         yield from self.body
         yield from self.orelse
+
+    def _get_yield_nodes_skip_lambdas(self):
+        """A While node can contain a Yield node in the test"""
+        yield from self.test._get_yield_nodes_skip_lambdas()
+        yield from super()._get_yield_nodes_skip_lambdas()
 
 
 class With(
@@ -4690,6 +4763,42 @@ class Unknown(mixins.AssignTypeMixin, NodeNG):
     def infer(self, context=None, **kwargs):
         """Inference on an Unknown node immediately terminates."""
         yield util.Uninferable
+
+
+class EvaluatedObject(NodeNG):
+    """Contains an object that has already been inferred
+
+    This class is useful to pre-evaluate a particular node,
+    with the resulting class acting as the non-evaluated node.
+    """
+
+    name = "EvaluatedObject"
+    _astroid_fields = ("original",)
+    _other_fields = ("value",)
+
+    original = None
+    """The original node that has already been evaluated
+
+    :type: NodeNG
+    """
+
+    value = None
+    """The inferred value
+
+    :type: Union[Uninferable, NodeNG]
+    """
+
+    def __init__(self, original, value):
+        self.original = original
+        self.value = value
+        super().__init__(
+            lineno=self.original.lineno,
+            col_offset=self.original.col_offset,
+            parent=self.original.parent,
+        )
+
+    def infer(self, context=None, **kwargs):
+        yield self.value
 
 
 # constants ##############################################################

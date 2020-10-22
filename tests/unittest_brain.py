@@ -1,20 +1,28 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2013-2014 Google, Inc.
-# Copyright (c) 2014-2018 Claudiu Popa <pcmanticore@gmail.com>
+# Copyright (c) 2014-2020 Claudiu Popa <pcmanticore@gmail.com>
 # Copyright (c) 2015-2016 Ceridwen <ceridwenv@gmail.com>
 # Copyright (c) 2015 LOGILAB S.A. (Paris, FRANCE) <contact@logilab.fr>
 # Copyright (c) 2015 raylu <lurayl@gmail.com>
 # Copyright (c) 2015 Philip Lorenz <philip@bithub.de>
 # Copyright (c) 2016 Florian Bruhin <me@the-compiler.org>
-# Copyright (c) 2017 Łukasz Rogalski <rogalski.91@gmail.com>
 # Copyright (c) 2017-2018 Bryce Guinta <bryce.paul.guinta@gmail.com>
-# Copyright (c) 2017 hippo91 <guillaume.peillex@gmail.com>
+# Copyright (c) 2017-2018 hippo91 <guillaume.peillex@gmail.com>
+# Copyright (c) 2017 Łukasz Rogalski <rogalski.91@gmail.com>
 # Copyright (c) 2017 David Euresti <github@euresti.com>
 # Copyright (c) 2017 Derek Gustafson <degustaf@gmail.com>
+# Copyright (c) 2018 Tomas Gavenciak <gavento@ucw.cz>
+# Copyright (c) 2018 David Poirier <david-poirier-csn@users.noreply.github.com>
+# Copyright (c) 2018 Ville Skyttä <ville.skytta@iki.fi>
 # Copyright (c) 2018 Nick Drozd <nicholasdrozd@gmail.com>
 # Copyright (c) 2018 Anthony Sottile <asottile@umich.edu>
 # Copyright (c) 2018 Ioana Tagirta <ioana.tagirta@gmail.com>
 # Copyright (c) 2018 Ahmed Azzaoui <ahmed.azzaoui@engie.com>
+# Copyright (c) 2019 Ashley Whetter <ashley@awhetter.co.uk>
+# Copyright (c) 2019 Tomas Novak <ext.Tomas.Novak@skoda-auto.cz>
+# Copyright (c) 2019 Hugo van Kemenade <hugovk@users.noreply.github.com>
+# Copyright (c) 2019 Grygorii Iermolenko <gyermolenko@gmail.com>
+# Copyright (c) 2019 Bryce Guinta <bryce.guinta@protonmail.com>
 
 # Licensed under the LGPL: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html
 # For details: https://github.com/PyCQA/astroid/blob/master/COPYING.LESSER
@@ -323,6 +331,18 @@ class NamedTupleTest(unittest.TestCase):
         self.assertIsInstance(inferred.bases[0], astroid.Name)
         self.assertEqual(inferred.bases[0].name, "tuple")
 
+    def test_invalid_label_does_not_crash_inference(self):
+        code = """
+        import collections
+        a = collections.namedtuple( 'a', ['b c'] )
+        a
+        """
+        node = builder.extract_node(code)
+        inferred = next(node.infer())
+        assert isinstance(inferred, astroid.ClassDef)
+        assert "b" not in inferred.locals
+        assert "c" not in inferred.locals
+
 
 class DefaultDictTest(unittest.TestCase):
     def test_1(self):
@@ -621,6 +641,21 @@ class EnumBrainTest(unittest.TestCase):
         enumeration = module["Enumeration"]
         test = next(enumeration.igetattr("test"))
         self.assertEqual(test.value, 42)
+
+    def test_ignores_with_nodes_from_body_of_enum(self):
+        code = """
+        import enum
+
+        class Error(enum.Enum):
+            Foo = "foo"
+            Bar = "bar"
+            with "error" as err:
+                pass
+        """
+        node = builder.extract_node(code)
+        inferred = next(node.infer())
+        assert "err" in inferred.locals
+        assert len(inferred.locals["err"]) == 1
 
     def test_enum_multiple_base_classes(self):
         module = builder.parse(
@@ -1633,10 +1668,13 @@ class TestLenBuiltinInference:
         )
         assert next(node.infer()).as_string() == "3"
 
-    @pytest.mark.xfail(reason="Can't retrieve subclassed type value ")
     def test_int_subclass_result(self):
-        """I am unable to figure out the value of an
-        object which subclasses int"""
+        """Check that a subclass of an int can still be inferred
+
+        This test does not properly infer the value passed to the
+        int subclass (5) but still returns a proper integer as we
+        fake the result of the `len()` call.
+        """
         node = astroid.extract_node(
             """
         class IntSubclass(int):
@@ -1648,7 +1686,7 @@ class TestLenBuiltinInference:
         len(F())
         """
         )
-        assert next(node.infer()).as_string() == "5"
+        assert next(node.infer()).as_string() == "0"
 
     @pytest.mark.xfail(reason="Can't use list special astroid fields")
     def test_int_subclass_argument(self):
@@ -1908,6 +1946,15 @@ def test_http_status_brain():
     # Cannot infer the exact value but the field is there.
     assert inferred is util.Uninferable
 
+    node = astroid.extract_node(
+        """
+    import http
+    http.HTTPStatus(200).phrase
+    """
+    )
+    inferred = next(node.infer())
+    assert isinstance(inferred, astroid.Const)
+
 
 def test_oserror_model():
     node = astroid.extract_node(
@@ -1971,6 +2018,37 @@ def test_dataclasses():
     name = second.getattr("name")
     assert len(name) == 1
     assert isinstance(name[0], astroid.Unknown)
+
+
+@pytest.mark.parametrize(
+    "code,expected_class,expected_value",
+    [
+        ("'hey'.encode()", astroid.Const, b""),
+        ("b'hey'.decode()", astroid.Const, ""),
+        ("'hey'.encode().decode()", astroid.Const, ""),
+    ],
+)
+def test_str_and_bytes(code, expected_class, expected_value):
+    node = astroid.extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, expected_class)
+    assert inferred.value == expected_value
+
+
+def test_no_recursionerror_on_self_referential_length_check():
+    """
+    Regression test for https://github.com/PyCQA/astroid/issues/777
+    """
+    with pytest.raises(astroid.InferenceError):
+        node = astroid.extract_node(
+            """
+        class Crash:
+            def __len__(self) -> int:
+                return len(self)
+        len(Crash()) #@
+        """
+        )
+        node.inferred()
 
 
 if __name__ == "__main__":

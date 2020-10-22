@@ -1,8 +1,10 @@
-# Copyright (c) 2016-2018 Claudiu Popa <pcmanticore@gmail.com>
+# -*- coding: utf-8 -*-
+# Copyright (c) 2016-2019 Claudiu Popa <pcmanticore@gmail.com>
 # Copyright (c) 2016 Derek Gustafson <degustaf@gmail.com>
 # Copyright (c) 2017-2018 Bryce Guinta <bryce.paul.guinta@gmail.com>
 # Copyright (c) 2017 Ceridwen <ceridwenv@gmail.com>
 # Copyright (c) 2017 Calen Pennington <cale@edx.org>
+# Copyright (c) 2018 Ville Skyttä <ville.skytta@iki.fi>
 # Copyright (c) 2018 Nick Drozd <nicholasdrozd@gmail.com>
 # Licensed under the LGPL: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html
 # For details: https://github.com/PyCQA/astroid/blob/master/COPYING.LESSER
@@ -322,7 +324,6 @@ class FunctionModel(ObjectModel):
                     doc=func.doc,
                     lineno=func.lineno,
                     col_offset=func.col_offset,
-                    parent=cls,
                 )
                 # pylint: disable=no-member
                 new_func.postinit(func.args, func.body, func.decorators, func.returns)
@@ -658,9 +659,16 @@ class ImportErrorInstanceModel(ExceptionInstanceModel):
         return node_classes.Const("")
 
 
+class UnicodeDecodeErrorInstanceModel(ExceptionInstanceModel):
+    @property
+    def attr_object(self):
+        return node_classes.Const("")
+
+
 BUILTIN_EXCEPTIONS = {
     "builtins.SyntaxError": SyntaxErrorInstanceModel,
     "builtins.ImportError": ImportErrorInstanceModel,
+    "builtins.UnicodeDecodeError": UnicodeDecodeErrorInstanceModel,
     # These are all similar to OSError in terms of attributes
     "builtins.OSError": OSErrorInstanceModel,
     "builtins.BlockingIOError": OSErrorInstanceModel,
@@ -736,3 +744,65 @@ class DictModel(ObjectModel):
 
         obj = objects.DictValues(obj)
         return self._generic_dict_attribute(obj, "values")
+
+
+class PropertyModel(ObjectModel):
+    """Model for a builtin property"""
+
+    # pylint: disable=import-outside-toplevel
+    def _init_function(self, name):
+        from astroid.node_classes import Arguments
+        from astroid.scoped_nodes import FunctionDef
+
+        args = Arguments()
+        args.postinit(
+            args=[],
+            defaults=[],
+            kwonlyargs=[],
+            kw_defaults=[],
+            annotations=[],
+            posonlyargs=[],
+            posonlyargs_annotations=[],
+            kwonlyargs_annotations=[],
+        )
+
+        function = FunctionDef(name=name, parent=self._instance)
+
+        function.postinit(args=args, body=[])
+        return function
+
+    @property
+    def attr_fget(self):
+        from astroid.scoped_nodes import FunctionDef
+
+        func = self._instance
+
+        class PropertyFuncAccessor(FunctionDef):
+            def infer_call_result(self, caller=None, context=None):
+                nonlocal func
+                if caller and len(caller.args) != 1:
+                    raise exceptions.InferenceError(
+                        "fget() needs a single argument", target=self, context=context
+                    )
+
+                yield from func.function.infer_call_result(
+                    caller=caller, context=context
+                )
+
+        property_accessor = PropertyFuncAccessor(name="fget", parent=self._instance)
+        property_accessor.postinit(args=func.args, body=func.body)
+        return property_accessor
+
+    @property
+    def attr_setter(self):
+        return self._init_function("setter")
+
+    @property
+    def attr_deleter(self):
+        return self._init_function("deleter")
+
+    @property
+    def attr_getter(self):
+        return self._init_function("getter")
+
+    # pylint: enable=import-outside-toplevel

@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2016, 2018 Claudiu Popa <pcmanticore@gmail.com>
+# Copyright (c) 2015-2016, 2018-2019 Claudiu Popa <pcmanticore@gmail.com>
 # Copyright (c) 2015-2016 Ceridwen <ceridwenv@gmail.com>
 # Copyright (c) 2018 Bryce Guinta <bryce.paul.guinta@gmail.com>
 # Copyright (c) 2018 Nick Drozd <nicholasdrozd@gmail.com>
@@ -104,17 +104,6 @@ class InferenceContext:
         clone.boundnode = self.boundnode
         clone.extra_context = self.extra_context
         return clone
-
-    def cache_generator(self, key, generator):
-        """Cache result of generator into dictionary
-
-        Used to cache inference results"""
-        results = []
-        for result in generator:
-            results.append(result)
-            yield result
-
-        self.inferred[key] = tuple(results)
 
     @contextlib.contextmanager
     def restore_path(self):

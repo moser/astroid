@@ -2,7 +2,7 @@
 # Copyright (c) 2006-2015 LOGILAB S.A. (Paris, FRANCE) <contact@logilab.fr>
 # Copyright (c) 2007 Marien Zwart <marienz@gentoo.org>
 # Copyright (c) 2013-2014 Google, Inc.
-# Copyright (c) 2014-2018 Claudiu Popa <pcmanticore@gmail.com>
+# Copyright (c) 2014-2020 Claudiu Popa <pcmanticore@gmail.com>
 # Copyright (c) 2014 Eevee (Alex Munroe) <amunroe@yelp.com>
 # Copyright (c) 2015-2016 Ceridwen <ceridwenv@gmail.com>
 # Copyright (c) 2015 Dmitry Pribysh <dmand@yandex.ru>
@@ -14,8 +14,14 @@
 # Copyright (c) 2017 Calen Pennington <calen.pennington@gmail.com>
 # Copyright (c) 2017 David Euresti <david@dropbox.com>
 # Copyright (c) 2017 Derek Gustafson <degustaf@gmail.com>
+# Copyright (c) 2018 Daniel Martin <daniel.martin@crowdstrike.com>
+# Copyright (c) 2018 Ville Skyttä <ville.skytta@iki.fi>
 # Copyright (c) 2018 Bryce Guinta <bryce.paul.guinta@gmail.com>
 # Copyright (c) 2018 Anthony Sottile <asottile@umich.edu>
+# Copyright (c) 2019 Stanislav Levin <slev@altlinux.org>
+# Copyright (c) 2019 David Liu <david@cs.toronto.edu>
+# Copyright (c) 2019 Ashley Whetter <ashley@awhetter.co.uk>
+# Copyright (c) 2019 Hugo van Kemenade <hugovk@users.noreply.github.com>
 
 # Licensed under the LGPL: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html
 # For details: https://github.com/PyCQA/astroid/blob/master/COPYING.LESSER
@@ -24,6 +30,7 @@
 """
 # pylint: disable=too-many-lines
 import platform
+import textwrap
 from functools import partial
 import unittest
 from unittest.mock import patch
@@ -42,6 +49,8 @@ from astroid import helpers
 from astroid import objects
 from astroid import test_utils
 from astroid import util
+from astroid.objects import ExceptionInstance
+
 from . import resources
 
 
@@ -419,7 +428,7 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
             del undefined_attr
         """
         delete = extract_node(code, __name__)
-        self.assertRaises(InferenceError, delete.infer)
+        self.assertRaises(InferenceError, next, delete.infer())
 
     def test_del2(self):
         code = """
@@ -497,18 +506,7 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         self.assertEqual(inferred.name, "set")
         self.assertIn("remove", inferred._proxied.locals)
 
-    @test_utils.require_version(maxver="3.0")
-    def test_unicode_type(self):
-        code = '''u = u""'''
-        ast = parse(code, __name__)
-        n = ast["u"]
-        inferred = next(n.infer())
-        self.assertIsInstance(inferred, nodes.Const)
-        self.assertIsInstance(inferred, Instance)
-        self.assertEqual(inferred.name, "unicode")
-        self.assertIn("lower", inferred._proxied.locals)
-
-    @unittest.expectedFailure
+    @pytest.mark.xfail(reason="Descriptors are not properly inferred as callable")
     def test_descriptor_are_callable(self):
         code = """
             class A:
@@ -1699,7 +1697,9 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
                 pass
         """
         )
-        self.assertIn("object", [base.name for base in klass.ancestors()])
+        ancestors = [base.name for base in klass.ancestors()]
+        expected_subset = ["datetime", "date"]
+        self.assertEqual(expected_subset, ancestors[:2])
 
     def test_stop_iteration_leak(self):
         code = """
@@ -2083,8 +2083,6 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
     def test_str_methods(self):
         code = """
         ' '.decode() #@
-
-        ' '.encode() #@
         ' '.join('abcd') #@
         ' '.replace('a', 'b') #@
         ' '.format('a') #@
@@ -2106,15 +2104,13 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         """
         ast = extract_node(code, __name__)
         self.assertInferConst(ast[0], "")
-        for i in range(1, 16):
+        for i in range(1, 15):
             self.assertInferConst(ast[i], "")
-        for i in range(16, 19):
+        for i in range(15, 18):
             self.assertInferConst(ast[i], 0)
 
     def test_unicode_methods(self):
         code = """
-        u' '.encode() #@
-
         u' '.decode() #@
         u' '.join('abcd') #@
         u' '.replace('a', 'b') #@
@@ -2137,9 +2133,9 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         """
         ast = extract_node(code, __name__)
         self.assertInferConst(ast[0], "")
-        for i in range(1, 16):
+        for i in range(1, 15):
             self.assertInferConst(ast[i], "")
-        for i in range(16, 19):
+        for i in range(15, 18):
             self.assertInferConst(ast[i], 0)
 
     def test_scope_lookup_same_attributes(self):
@@ -2459,7 +2455,6 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         1 ** (lambda x: x) #@
         {} * {} #@
         {} - {} #@
-        {} | {} #@
         {} >> {} #@
         [] + () #@
         () + [] #@
@@ -2504,7 +2499,6 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
             msg.format(op="**", lhs="int", rhs="function"),
             msg.format(op="*", lhs="dict", rhs="dict"),
             msg.format(op="-", lhs="dict", rhs="dict"),
-            msg.format(op="|", lhs="dict", rhs="dict"),
             msg.format(op=">>", lhs="dict", rhs="dict"),
             msg.format(op="+", lhs="list", rhs="tuple"),
             msg.format(op="+", lhs="tuple", rhs="list"),
@@ -2519,6 +2513,12 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
             msg.format(op="+=", lhs="int", rhs="A"),
             msg.format(op="+=", lhs="int", rhs="list"),
         ]
+
+        # PEP-584 supports | for dictionary union
+        if sys.version_info < (3, 9):
+            ast_nodes.append(extract_node("{} | {} #@"))
+            expected.append(msg.format(op="|", lhs="dict", rhs="dict"))
+
         for node, expected_value in zip(ast_nodes, expected):
             errors = node.type_errors()
             self.assertEqual(len(errors), 1)
@@ -3254,7 +3254,7 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         self.assertIsInstance(inferred, Instance)
         self.assertEqual(inferred.name, "B")
 
-    @unittest.expectedFailure
+    @pytest.mark.xfail(reason="String interpolation is incorrect for modulo formatting")
     def test_string_interpolation(self):
         ast_nodes = extract_node(
             """
@@ -3626,7 +3626,7 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         ]
         self.assertEqual(titles, ["Catch 22", "Ubik", "Grimus"])
 
-    @unittest.expectedFailure
+    @pytest.mark.xfail(reason="Does not support function metaclasses")
     def test_function_metaclasses(self):
         # These are not supported right now, although
         # they will be in the future.
@@ -3773,7 +3773,7 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         second = next(ast_nodes[1].infer())
         self.assertIsInstance(second, Instance)
 
-    @unittest.expectedFailure
+    @pytest.mark.xfail(reason="Metaclass arguments not inferred as classes")
     def test_metaclass_arguments_are_classes_not_instances(self):
         ast_node = extract_node(
             """
@@ -3856,19 +3856,6 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
             inferred.getattr("teta")
         inferred.getattr("a")
 
-    @test_utils.require_version(maxver="3.0")
-    def test_delayed_attributes_with_old_style_classes(self):
-        ast_node = extract_node(
-            """
-        class A:
-            __slots__ = ('a', )
-        a = A()
-        a.teta = 42
-        a #@
-        """
-        )
-        next(ast_node.infer()).getattr("teta")
-
     def test_lambda_as_methods(self):
         ast_node = extract_node(
             """
@@ -3903,7 +3890,7 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         self.assertIsInstance(inferred, nodes.Const)
         self.assertEqual(inferred.value, 25)
 
-    @unittest.expectedFailure
+    @pytest.mark.xfail(reason="Cannot reuse inner value due to inference context reuse")
     def test_inner_value_redefined_by_subclass_with_mro(self):
         # This might work, but it currently doesn't due to not being able
         # to reuse inference contexts.
@@ -4926,6 +4913,24 @@ def test_regression_infinite_loop_decorator():
     assert result.value == 1
 
 
+def test_stop_iteration_in_int():
+    """Handle StopIteration error in infer_int."""
+    code = """
+    def f(lst):
+        if lst[0]:
+            return f(lst)
+        else:
+            args = lst[:1]
+            return int(args[0])
+
+    f([])
+    """
+    [first_result, second_result] = extract_node(code).inferred()
+    assert first_result is util.Uninferable
+    assert isinstance(second_result, Instance)
+    assert second_result.name == "int"
+
+
 def test_call_on_instance_with_inherited_dunder_call_method():
     """Stop inherited __call__ method from incorrectly returning wrong class
 
@@ -5148,10 +5153,25 @@ def test_builtin_inference_list_of_exceptions():
     inferred = next(node.infer())
     assert isinstance(inferred, nodes.Tuple)
     assert len(inferred.elts) == 2
-    assert isinstance(inferred.elts[0], nodes.ClassDef)
-    assert inferred.elts[0].name == "ValueError"
-    assert isinstance(inferred.elts[1], nodes.ClassDef)
-    assert inferred.elts[1].name == "TypeError"
+    assert isinstance(inferred.elts[0], nodes.EvaluatedObject)
+    assert isinstance(inferred.elts[0].value, nodes.ClassDef)
+    assert inferred.elts[0].value.name == "ValueError"
+    assert isinstance(inferred.elts[1], nodes.EvaluatedObject)
+    assert isinstance(inferred.elts[1].value, nodes.ClassDef)
+    assert inferred.elts[1].value.name == "TypeError"
+
+    # Test that inference of evaluated objects returns what is expected
+    first_elem = next(inferred.elts[0].infer())
+    assert isinstance(first_elem, nodes.ClassDef)
+    assert first_elem.name == "ValueError"
+
+    second_elem = next(inferred.elts[1].infer())
+    assert isinstance(second_elem, nodes.ClassDef)
+    assert second_elem.name == "TypeError"
+
+    # Test that as_string() also works
+    as_string = inferred.as_string()
+    assert as_string.strip() == "(ValueError, TypeError)"
 
 
 @test_utils.require_version(minver="3.6")
@@ -5236,14 +5256,24 @@ def test_infer_context_manager_with_unknown_args():
     assert isinstance(next(node.infer()), nodes.Const)
 
 
-def test_subclass_of_exception():
-    code = """
-    class Error(Exception):
-        pass
+@pytest.mark.parametrize(
+    "code",
+    [
+        """
+        class Error(Exception):
+            pass
 
-    a = Error()
-    a
-    """
+        a = Error()
+        a #@
+        """,
+        """
+        class Error(Exception):
+            def method(self):
+                 self #@
+        """,
+    ],
+)
+def test_subclass_of_exception(code):
     inferred = next(extract_node(code).infer())
     assert isinstance(inferred, Instance)
     args = next(inferred.igetattr("args"))
@@ -5291,6 +5321,546 @@ def test_assert_last_function_returns_none_on_inference():
     inferred = next(node.infer())
     assert isinstance(inferred, nodes.Const)
     assert inferred.value is None
+
+
+@test_utils.require_version(minver="3.8")
+def test_posonlyargs_inference():
+    code = """
+    class A:
+        method = lambda self, b, /, c: b + c
+
+        def __init__(self, other=(), /, **kw):
+            self #@
+    A() #@
+    A().method #@
+
+    """
+    self_node, instance, lambda_method = extract_node(code)
+    inferred = next(self_node.infer())
+    assert isinstance(inferred, Instance)
+    assert inferred.name == "A"
+
+    inferred = next(instance.infer())
+    assert isinstance(inferred, Instance)
+    assert inferred.name == "A"
+
+    inferred = next(lambda_method.infer())
+    assert isinstance(inferred, BoundMethod)
+    assert inferred.type == "method"
+
+
+def test_infer_args_unpacking_of_self():
+    code = """
+    class A:
+        def __init__(*args, **kwargs):
+            self, *args = args
+            self.data = {1: 2}
+            self #@
+    A().data #@
+    """
+    self, data = extract_node(code)
+    inferred_self = next(self.infer())
+    assert isinstance(inferred_self, Instance)
+    assert inferred_self.name == "A"
+
+    inferred_data = next(data.infer())
+    assert isinstance(inferred_data, nodes.Dict)
+    assert inferred_data.as_string() == "{1: 2}"
+
+
+def test_infer_exception_instance_attributes():
+    code = """
+    class UnsupportedFormatCharacter(Exception):
+        def __init__(self, index):
+            Exception.__init__(self, index)
+            self.index = index
+
+    try:
+       1/0
+    except UnsupportedFormatCharacter as exc:
+       exc #@
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, ExceptionInstance)
+    index = inferred.getattr("index")
+    assert len(index) == 1
+    assert isinstance(index[0], nodes.AssignAttr)
+
+
+@pytest.mark.parametrize(
+    "code,instance_name",
+    [
+        (
+            """
+        class A:
+            def __enter__(self):
+                return self
+            def __exit__(self, err_type, err, traceback):
+                return
+        class B(A):
+            pass
+        with B() as b:
+            b #@
+        """,
+            "B",
+        ),
+        (
+            """
+    class A:
+        def __enter__(self):
+            return A()
+        def __exit__(self, err_type, err, traceback):
+            return
+    class B(A):
+            pass
+    with B() as b:
+        b #@
+    """,
+            "A",
+        ),
+        (
+            """
+        class A:
+            def test(self):
+                return A()
+        class B(A):
+            def test(self):
+                return A.test(self)
+        B().test()
+        """,
+            "A",
+        ),
+    ],
+)
+def test_inference_is_limited_to_the_boundnode(code, instance_name):
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, Instance)
+    assert inferred.name == instance_name
+
+
+def test_property_inference():
+    code = """
+    class A:
+        @property
+        def test(self):
+            return 42
+
+    A.test #@
+    A().test #@
+    A.test.fget(A) #@
+    A.test.setter #@
+    A.test.getter #@
+    A.test.deleter #@
+    """
+    prop, prop_result, prop_fget_result, prop_setter, prop_getter, prop_deleter = extract_node(
+        code
+    )
+
+    inferred = next(prop.infer())
+    assert isinstance(inferred, objects.Property)
+    assert inferred.pytype() == "builtins.property"
+    assert inferred.type == "property"
+
+    inferred = next(prop_result.infer())
+    print(prop_result.as_string())
+    assert isinstance(inferred, nodes.Const)
+    assert inferred.value == 42
+
+    inferred = next(prop_fget_result.infer())
+    assert isinstance(inferred, nodes.Const)
+    assert inferred.value == 42
+
+    for prop_func in prop_setter, prop_getter, prop_deleter:
+        inferred = next(prop_func.infer())
+        assert isinstance(inferred, nodes.FunctionDef)
+
+
+def test_property_as_string():
+    code = """
+    class A:
+        @property
+        def test(self):
+            return 42
+
+    A.test #@
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, objects.Property)
+    property_body = textwrap.dedent(
+        """
+    @property
+    def test(self):
+        return 42
+    """
+    )
+    assert inferred.as_string().strip() == property_body.strip()
+
+
+def test_property_callable_inference():
+    code = """
+    class A:
+        def func(self):
+            return 42
+        p = property(func)
+    A().p
+    """
+    property_call = extract_node(code)
+    inferred = next(property_call.infer())
+    assert isinstance(inferred, nodes.Const)
+    assert inferred.value == 42
+
+    # Try with lambda as well
+    code = """
+    class A:
+        p = property(lambda self: 42)
+    A().p
+    """
+    property_call = extract_node(code)
+    inferred = next(property_call.infer())
+    assert isinstance(inferred, nodes.Const)
+    assert inferred.value == 42
+
+
+def test_recursion_error_inferring_builtin_containers():
+    node = extract_node(
+        """
+    class Foo:
+        a = "foo"
+    inst = Foo()
+
+    b = tuple([inst.a]) #@
+    inst.a = b
+    """
+    )
+    helpers.safe_infer(node.targets[0])
+
+
+def test_inferaugassign_picking_parent_instead_of_stmt():
+    code = """
+    from collections import namedtuple
+    SomeClass = namedtuple('SomeClass', ['name'])
+    items = [SomeClass(name='some name')]
+
+    some_str = ''
+    some_str += ', '.join(__(item) for item in items)
+    """
+    # item needs to be inferrd as `SomeClass` but it was inferred
+    # as a string because the entire `AugAssign` node was inferred
+    # as a string.
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, Instance)
+    assert inferred.name == "SomeClass"
+
+
+def test_classmethod_from_builtins_inferred_as_bound():
+    code = """
+    import builtins
+
+    class Foo():
+        @classmethod
+        def bar1(cls, text):
+            pass
+
+        @builtins.classmethod
+        def bar2(cls, text):
+            pass
+
+    Foo.bar1 #@
+    Foo.bar2 #@
+    """
+    first_node, second_node = extract_node(code)
+    assert isinstance(next(first_node.infer()), BoundMethod)
+    assert isinstance(next(second_node.infer()), BoundMethod)
+
+
+def test_infer_dict_passes_context():
+    code = """
+    k = {}
+    (_ for k in __(dict(**k)))
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, Instance)
+    assert inferred.qname() == "builtins.dict"
+
+
+@pytest.mark.parametrize(
+    "code,obj,obj_type",
+    [
+        (
+            """
+            def klassmethod1(method):
+                @classmethod
+                def inner(cls):
+                    return method(cls)
+                return inner
+
+            class X(object):
+                @klassmethod1
+                def x(cls):
+                    return 'X'
+            X.x
+            """,
+            BoundMethod,
+            "classmethod",
+        ),
+        (
+            """
+            def staticmethod1(method):
+                @staticmethod
+                def inner(cls):
+                    return method(cls)
+                return inner
+
+            class X(object):
+                @staticmethod1
+                def x(cls):
+                    return 'X'
+            X.x
+            """,
+            nodes.FunctionDef,
+            "staticmethod",
+        ),
+        (
+            """
+            def klassmethod1(method):
+                def inner(cls):
+                    return method(cls)
+                return classmethod(inner)
+
+            class X(object):
+                @klassmethod1
+                def x(cls):
+                    return 'X'
+            X.x
+            """,
+            BoundMethod,
+            "classmethod",
+        ),
+        (
+            """
+            def staticmethod1(method):
+                def inner(cls):
+                    return method(cls)
+                return staticmethod(inner)
+
+            class X(object):
+                @staticmethod1
+                def x(cls):
+                    return 'X'
+            X.x
+            """,
+            nodes.FunctionDef,
+            "staticmethod",
+        ),
+    ],
+)
+def test_custom_decorators_for_classmethod_and_staticmethods(code, obj, obj_type):
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, obj)
+    assert inferred.type == obj_type
+
+
+@pytest.mark.skipif(sys.version_info < (3, 8), reason="Needs dataclasses available")
+def test_dataclasses_subscript_inference_recursion_error():
+    code = """
+    from dataclasses import dataclass, replace
+
+    @dataclass
+    class ProxyConfig:
+        auth: str = "/auth"
+
+
+    a = ProxyConfig("")
+    test_dict = {"proxy" : {"auth" : "", "bla" : "f"}}
+
+    foo = test_dict['proxy']
+    replace(a, **test_dict['proxy']) # This fails
+    """
+    node = extract_node(code)
+    # Reproduces only with safe_infer()
+    assert helpers.safe_infer(node) is None
+
+
+def test_self_reference_infer_does_not_trigger_recursion_error():
+    # Prevents https://github.com/PyCQA/pylint/issues/1285
+    code = """
+    def func(elems):
+        return elems
+
+    class BaseModel(object):
+
+        def __init__(self, *args, **kwargs):
+            self._reference = func(*self._reference.split('.'))
+    BaseModel()._reference
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert inferred is util.Uninferable
+
+
+def test_inferring_properties_multiple_time_does_not_mutate_locals_multiple_times():
+    code = """
+    class A:
+        @property
+        def a(self):
+            return 42
+
+    A()
+    """
+    node = extract_node(code)
+    # Infer the class
+    cls = next(node.infer())
+    prop, = cls.getattr("a")
+
+    # Try to infer the property function *multiple* times. `A.locals` should be modified only once
+    for _ in range(3):
+        prop.inferred()
+    a_locals = cls.locals["a"]
+    # [FunctionDef, Property]
+    assert len(a_locals) == 2
+
+
+def test_getattr_fails_on_empty_values():
+    code = """
+    import collections
+    collections
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    with pytest.raises(exceptions.InferenceError):
+        next(inferred.igetattr(""))
+
+    with pytest.raises(exceptions.AttributeInferenceError):
+        inferred.getattr("")
+
+
+def test_infer_first_argument_of_static_method_in_metaclass():
+    code = """
+    class My(type):
+        @staticmethod
+        def test(args):
+            args #@
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert inferred is util.Uninferable
+
+
+def test_recursion_error_metaclass_monkeypatching():
+    module = resources.build_file(
+        "data/metaclass_recursion/monkeypatch.py", "data.metaclass_recursion"
+    )
+    cls = next(module.igetattr("MonkeyPatchClass"))
+    assert isinstance(cls, nodes.ClassDef)
+    assert cls.declared_metaclass() is None
+
+
+@pytest.mark.xfail(reason="Cannot fully infer all the base classes properly.")
+def test_recursion_error_self_reference_type_call():
+    # Fix for https://github.com/PyCQA/astroid/issues/199
+    code = """
+    class A(object):
+        pass
+    class SomeClass(object):
+        route_class = A
+        def __init__(self):
+            self.route_class = type('B', (self.route_class, ), {})
+            self.route_class() #@
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, Instance)
+    assert inferred.name == "B"
+    # TODO: Cannot infer [B, A, object] but at least the recursion error is gone.
+    assert [cls.name for cls in inferred.mro()] == ["B", "A", "object"]
+
+
+def test_allow_retrieving_instance_attrs_and_special_attrs_for_functions():
+    code = """
+    class A:
+        def test(self):
+            "a"
+        # Add `__doc__` to `FunctionDef.instance_attrs` via an `AugAssign`
+        test.__doc__ += 'b'
+        test #@
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    attrs = inferred.getattr("__doc__")
+    # One from the `AugAssign`, one from the special attributes
+    assert len(attrs) == 2
+
+
+def test_implicit_parameters_bound_method():
+    code = """
+    class A(type):
+        @classmethod
+        def test(cls, first): return first
+        def __new__(cls, name, bases, dictionary):
+            return super().__new__(cls, name, bases, dictionary)
+
+    A.test #@
+    A.__new__ #@
+    """
+    test, dunder_new = extract_node(code)
+    test = next(test.infer())
+    assert isinstance(test, BoundMethod)
+    assert test.implicit_parameters() == 1
+
+    dunder_new = next(dunder_new.infer())
+    assert isinstance(dunder_new, BoundMethod)
+    assert dunder_new.implicit_parameters() == 0
+
+
+def test_super_inference_of_abstract_property():
+    code = """
+    from abc import abstractmethod
+
+    class A:
+       @property
+       def test(self):
+           return "super"
+
+    class C:
+       @property
+       @abstractmethod
+       def test(self):
+           "abstract method"
+
+    class B(A, C):
+
+       @property
+       def test(self):
+            super() #@
+
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    test = inferred.getattr("test")
+    assert len(test) == 2
+
+
+def test_infer_generated_setter():
+    code = """
+    class A:
+        @property
+        def test(self):
+            pass
+    A.test.setter
+    """
+    node = extract_node(code)
+    inferred = next(node.infer())
+    assert isinstance(inferred, nodes.FunctionDef)
+    assert isinstance(inferred.args, nodes.Arguments)
+    # This line used to crash because property generated functions
+    # did not have args properly set
+    assert list(inferred.nodes_of_class(nodes.Const)) == []
 
 
 if __name__ == "__main__":

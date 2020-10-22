@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2016, 2018 Claudiu Popa <pcmanticore@gmail.com>
+# Copyright (c) 2014-2016, 2018, 2020 Claudiu Popa <pcmanticore@gmail.com>
 # Copyright (c) 2015-2016 Ceridwen <ceridwenv@gmail.com>
 # Copyright (c) 2018 Bryce Guinta <bryce.paul.guinta@gmail.com>
 
@@ -50,7 +50,8 @@ input = input
 from sys import intern
 map = map
 range = range
-from imp import reload as reload_module
+from importlib import reload
+reload_module = lambda module: reload(module)
 from functools import reduce
 from shlex import quote as shlex_quote
 from io import StringIO
@@ -144,8 +145,8 @@ def _six_fail_hook(modname):
         attribute = modname[start_index:].lstrip(".").replace(".", "_")
         try:
             import_attr = module.getattr(attribute)[0]
-        except AttributeInferenceError:
-            raise AstroidBuildingError(modname=modname)
+        except AttributeInferenceError as exc:
+            raise AstroidBuildingError(modname=modname) from exc
         if isinstance(import_attr, nodes.Import):
             submodule = MANAGER.ast_from_module_name(import_attr.names[0][0])
             return submodule
